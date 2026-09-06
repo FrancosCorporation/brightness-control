@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Controle de Brilho
+Comment=Ajustar brilho dos monitores via DDC/CI
+Exec=brightness-gui
+Icon=display-brightness
+Terminal=false
+Type=Application
+Categories=Settings;HardwareSettings;System;
+Keywords=brightness;brilho;monitor;display;
+StartupNotify=true
