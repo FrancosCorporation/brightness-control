@@ -49,7 +49,7 @@ sudo dnf install ddcutil python3-gobject gtk3
 ### Instalação
 ```bash
 # Clone o repositório
-git clone https://github.com/SEU_USUARIO/brightness-control.git
+git clone https://github.com/FrancosCorporation/brightness-control.git
 cd brightness-control
 
 # Torne executável
@@ -190,8 +190,8 @@ MIT License — veja [LICENSE](LICENSE) para detalhes.
 
 ## 💬 Suporte
 
-- **Issues**: [GitHub Issues](https://github.com/SEU_USUARIO/brightness-control/issues)
-- **Discussões**: [GitHub Discussions](https://github.com/SEU_USUARIO/brightness-control/discussions)
+- **Issues**: [GitHub Issues](https://github.com/FrancosCorporation/brightness-control/issues)
+- **Discussões**: [GitHub Discussions](https://github.com/FrancosCorporation/brightness-control/discussions)
 
 ---
 
