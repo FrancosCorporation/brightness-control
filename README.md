@@ -2,8 +2,8 @@
 
 > Controle de brilho para monitores externos no Linux via **DDC/CI** (hardware) + **xrandr** (software dimming)
 
-![GitHub release](https://img.shields.io/github/v/release/USER/brightness-control)
-![License](https://img.shields.io/github/license/USER/brightness-control)
+![GitHub release](https://img.shields.io/github/v/release/FrancosCorporation/brightness-control)
+![License](https://img.shields.io/github/license/FrancosCorporation/brightness-control)
 ![Python](https://img.shields.io/badge/python-3.8+-blue)
 ![GTK](https://img.shields.io/badge/GTK-3-green)
 
@@ -24,9 +24,11 @@
 
 ## 📸 Capturas de Tela
 
-| Interface Principal | Menu de Aplicativos |
-|---------------------|---------------------|
-| ![Main UI](docs/screenshot-main.png) | ![Menu](docs/screenshot-menu.png) |
+### Interface Principal
+![Interface Principal](docs/screenshot-main.png)
+
+### Demo Animado
+![Demo](docs/demo.gif)
 
 ---
 
