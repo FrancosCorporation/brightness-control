@@ -1,5 +1,22 @@
 # Brightness Control 🖥️🌙
 
+## 🐳 Instalação e Execução (Docker) — recomendado
+
+### Pré-requisitos
+- [Docker](https://docs.docker.com/get-docker/) + Docker Compose
+
+### Rodar com Docker
+```bash
+docker compose up --build
+```
+App desktop — container não é o fluxo recomendado.
+
+### Sem Docker (local)
+```bash
+# App desktop Linux (X11)
+./brightness-gui
+```
+
 > Controle de brilho para monitores externos no Linux via **DDC/CI** (hardware) + **xrandr** (software dimming)
 
 ![GitHub release](https://img.shields.io/github/v/release/FrancosCorporation/brightness-control)
@@ -16,8 +33,10 @@
 | 🖥️ **Hardware (DDC/CI)** | Controla o backlight real do monitor (0-100%) |
 | 🌑 **Software (xrandr)** | Escurecimento por GPU — **vai além do zero do hardware** |
 | 🎚️ **Live preview** | Arraste o slider → brilho muda em tempo real |
-| ⚡ **Debounce inteligente** | Movimentos rápidos são consolidados, sem travar a UI |
-| 🔄 **Restaura ao cancelar** | Fecha sem salvar → volta ao brilho original |
+| ⚡ **Debounce inteligente** | Hardware coalescido e software com debounce de 150ms, sem travar a UI |
+| 🔄 **Restaura ao cancelar** | Cancelar ou fechar a janela → volta ao brilho original |
+| ⌨️ **Atalhos via CLI** | `--adjust-hw`, `--toggle-sw` e `--restore-last` sem abrir a janela |
+| 💾 **Persistência** | Últimos valores salvos em `~/.config/brightness-control/config.json` |
 | 📱 **Interface nativa GTK3** | Integrada ao desktop, aparece no menu de aplicativos |
 
 ---
@@ -84,9 +103,15 @@ brightness-gui --adjust-hw +10
 # Diminuir brilho hardware -10
 brightness-gui --adjust-hw -10
 
-# Toggle software dimming 50%
+# Toggle software dimming (100% <-> último valor, padrão 50%)
 brightness-gui --toggle-sw
+
+# Restaurar os últimos valores salvos (ex.: no autostart)
+brightness-gui --restore-last
 ```
+
+> Os valores de hardware/software são salvos ao clicar em **OK** ou ao usar as
+> opções de CLI. O `--toggle-sw` lembra o último nível de escurecimento usado.
 
 ---
 
@@ -99,7 +124,9 @@ sudo usermod -aG i2c $USER
 ```
 
 ### Monitores específicos
-Edite `brightness-gui` e ajuste `self.displays` se quiser filtrar monitores.
+Os monitores são detectados automaticamente (`ddcutil detect`). Se algum
+monitor não for desejado, filtre a lista em `detect_displays()` no
+`brightness-gui`.
 
 ### Inicialização automática
 Crie `~/.config/autostart/brightness-control.desktop`:
@@ -127,17 +154,32 @@ Hidden=false
 ## 🛠️ Arquitetura
 
 ```
-brightness-gui (Python/GTK3)
-├── DDC/CI via ddcutil (hardware backlight)
-│   ├── setvcp 10 <value>  — VCP code 0x10 = Brightness
-│   └── getvcp 10          — Lê valor atual
-├── xrandr --brightness (software dimming)
-│   └── Gamma ramp manipulation via X11
+brightness-gui (Python/GTK3, arquivo único)
+├── Backend
+│   ├── DDC/CI via ddcutil — setvcp/getvcp 10 (VCP 0x10 = Brightness)
+│   └── xrandr --brightness — gamma ramp via X11
+├── Parsers puros e testáveis (detect / getvcp / xrandr --verbose)
+├── CLI: --adjust-hw, --toggle-sw, --restore-last
+│   └── Config em ~/.config/brightness-control/config.json
 └── GTK3 UI
-    ├── Gtk.Scale (dual: hardware + software)
-    ├── Threading para não travar UI
-    └── Debounce + fila de comandos
+    ├── Gtk.Scale duplo (hardware + software)
+    ├── Worker de hardware coalescido (thread + lock)
+    ├── Debounce de 150ms no software
+    └── Cancelar/fechar restaura os valores originais
 ```
+
+---
+
+## 🧪 Testes
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+Os parsers e as ações de CLI são testados sem precisar de GTK nem de monitores
+físicos. O fluxo da janela tem um smoke test que usa Xvfb e é pulado
+automaticamente quando não há display. O CI roda `py_compile` + testes em cada
+push/PR.
 
 ---
 

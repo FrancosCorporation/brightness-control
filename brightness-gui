@@ -1,62 +1,328 @@
 #!/usr/bin/env python3
-import gi
-gi.require_version('Gtk', '3.0')
-from gi.repository import Gtk, GLib, Gdk
-import subprocess
-import threading
+"""Controle de brilho para monitores externos no Linux.
 
-class BrightnessApp:
+Hardware via DDC/CI (ddcutil) e escurecimento extra via xrandr (software).
+Sem argumentos abre a interface GTK3; as opcoes --adjust-hw, --toggle-sw e
+--restore-last executam acoes rapidas sem interface (uteis para atalhos).
+"""
+
+import argparse
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import threading
+import traceback
+
+import gi
+
+gi.require_version('Gtk', '3.0')
+from gi.repository import GLib, Gtk
+
+VCP_BRIGHTNESS = '10'
+HW_MIN = 0
+HW_MAX = 100
+HW_DEFAULT = 50
+SW_MIN = 0.1
+SW_MAX = 1.0
+SW_DIM_DEFAULT = 0.5
+DEBOUNCE_MS = 150
+TIMEOUT_DETECT = 10
+TIMEOUT_HW = 5
+TIMEOUT_SW = 5
+
+_ENV = dict(os.environ, LC_ALL='C')
+
+
+def _run(cmd, timeout):
+    """Executa um comando com timeout e locale fixo; retorna None em falha."""
+    try:
+        return subprocess.run(
+            cmd, capture_output=True, text=True, timeout=timeout, env=_ENV)
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Parsers (puros, testaveis sem GTK)
+# ---------------------------------------------------------------------------
+
+def parse_ddcutil_displays(stdout):
+    displays = []
+    for line in stdout.splitlines():
+        if line.startswith('Display'):
+            parts = line.split()
+            if len(parts) >= 2 and parts[1].isdigit():
+                displays.append(int(parts[1]))
+    return displays
+
+
+def parse_ddcutil_brightness(stdout):
+    match = re.search(r'current value\s*=\s*(\d+)', stdout)
+    return int(match.group(1)) if match else None
+
+
+def parse_xrandr_outputs(stdout):
+    outputs = []
+    for line in stdout.splitlines():
+        if ' connected' in line:
+            name = line.split()[0]
+            if name not in outputs:
+                outputs.append(name)
+    return outputs
+
+
+def parse_xrandr_brightness(stdout, output=None):
+    """Retorna {output: brilho} ou o brilho de um output especifico."""
+    values = {}
+    current = None
+    for line in stdout.splitlines():
+        match = re.match(r'^(\S+) connected', line)
+        if match:
+            current = match.group(1)
+            continue
+        if current is None:
+            continue
+        match = re.match(r'^\s+Brightness:\s*([\d.]+)', line)
+        if match:
+            values[current] = float(match.group(1))
+            current = None
+    if output is not None:
+        return values.get(output)
+    return values
+
+
+def clamp_hw(value):
+    return max(HW_MIN, min(HW_MAX, int(value)))
+
+
+def clamp_sw(value):
+    return max(SW_MIN, min(SW_MAX, float(value)))
+
+
+# ---------------------------------------------------------------------------
+# Config persistente (~/.config/brightness-control/config.json)
+# ---------------------------------------------------------------------------
+
+def config_path():
+    base = os.environ.get('XDG_CONFIG_HOME') or os.path.expanduser('~/.config')
+    return os.path.join(base, 'brightness-control', 'config.json')
+
+
+def load_config():
+    try:
+        with open(config_path(), encoding='utf-8') as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_config(updates):
+    data = load_config()
+    data.update(updates)
+    path = config_path()
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'w', encoding='utf-8') as handle:
+            json.dump(data, handle, indent=2)
+    except OSError:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Backend ddcutil / xrandr
+# ---------------------------------------------------------------------------
+
+def ddcutil_available():
+    return shutil.which('ddcutil') is not None
+
+
+def xrandr_available():
+    return shutil.which('xrandr') is not None
+
+
+def detect_displays():
+    if not ddcutil_available():
+        return []
+    result = _run(['ddcutil', 'detect', '--terse'], TIMEOUT_DETECT)
+    if result is None:
+        return []
+    return parse_ddcutil_displays(result.stdout)
+
+
+def detect_outputs():
+    if not xrandr_available():
+        return []
+    result = _run(['xrandr', '--query'], TIMEOUT_SW)
+    if result is None:
+        return []
+    return parse_xrandr_outputs(result.stdout)
+
+
+def read_hw_brightness(display):
+    result = _run(['ddcutil', 'getvcp', VCP_BRIGHTNESS,
+                   '--display', str(display)], TIMEOUT_HW)
+    if result is None:
+        return None
+    return parse_ddcutil_brightness(result.stdout)
+
+
+def read_sw_brightness_all(outputs):
+    if not outputs:
+        return {}
+    result = _run(['xrandr', '--verbose'], TIMEOUT_SW)
+    if result is None:
+        return {}
+    values = parse_xrandr_brightness(result.stdout)
+    return {out: values[out] for out in outputs if out in values}
+
+
+def set_hw_brightness(display, value):
+    result = _run(['ddcutil', 'setvcp', VCP_BRIGHTNESS, str(value),
+                   '--display', str(display)], TIMEOUT_HW)
+    return result is not None
+
+
+def set_sw_brightness(output, value):
+    result = _run(['xrandr', '--output', output, '--brightness',
+                   f'{value:.2f}'], TIMEOUT_SW)
+    return result is not None
+
+
+# ---------------------------------------------------------------------------
+# Acoes de linha de comando (sem GTK)
+# ---------------------------------------------------------------------------
+
+def run_adjust_hw(delta):
+    displays = detect_displays()
+    if not displays:
+        print('Nenhum monitor DDC/CI detectado.', file=sys.stderr)
+        return 1
+    current = next(
+        (value for value in (read_hw_brightness(d) for d in displays)
+         if value is not None), None)
+    if current is None:
+        current = clamp_hw(load_config().get('hw', HW_DEFAULT))
+    new_value = clamp_hw(current + delta)
+    results = [set_hw_brightness(d, new_value) for d in displays]
+    if not all(results):
+        print('Falha ao ajustar o brilho de hardware.', file=sys.stderr)
+        return 1
+    save_config({'hw': new_value})
+    print(f'Brilho de hardware: {new_value}%')
+    return 0
+
+
+def run_toggle_sw():
+    outputs = detect_outputs()
+    if not outputs:
+        print('Nenhum output XRandR disponivel (Wayland nao e suportado).',
+              file=sys.stderr)
+        return 1
+    config = load_config()
+    current = next(
+        (value for value in read_sw_brightness_all(outputs).values()
+         if value is not None), None)
+    if current is None:
+        current = clamp_sw(config.get('sw', SW_MAX))
+    if current >= SW_MAX - 0.005:
+        new_value = clamp_sw(config.get('sw_toggle', SW_DIM_DEFAULT))
+        config['sw_toggle'] = new_value
+    else:
+        new_value = SW_MAX
+        config['sw_toggle'] = clamp_sw(current)
+    for out in outputs:
+        set_sw_brightness(out, new_value)
+    save_config({'sw': new_value, 'sw_toggle': config['sw_toggle']})
+    print(f'Escurecimento por software: {int(new_value * 100)}%')
+    return 0
+
+
+def run_restore_last():
+    config = load_config()
+    hw_value = config.get('hw')
+    sw_value = config.get('sw')
+    if hw_value is None and sw_value is None:
+        print('Nenhum valor salvo para restaurar.', file=sys.stderr)
+        return 1
+    if hw_value is not None:
+        for display in detect_displays():
+            set_hw_brightness(display, clamp_hw(hw_value))
+    if sw_value is not None:
+        for output in detect_outputs():
+            set_sw_brightness(output, clamp_sw(sw_value))
+    print('Valores restaurados.')
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Interface GTK3
+# ---------------------------------------------------------------------------
+
+class BrightnessWindow:
     def __init__(self):
-        # Detecta monitores DDC/CI
-        result = subprocess.run(['ddcutil', 'detect', '--terse'], 
-                                capture_output=True, text=True)
-        self.displays = []
-        for line in result.stdout.split('\n'):
-            if line.startswith('Display'):
-                parts = line.split()
-                if len(parts) >= 2:
-                    self.displays.append(int(parts[1]))
-        
-        # Detecta outputs XRandR para software dimming
-        self.xrandr_outputs = []
-        try:
-            out = subprocess.run(['xrandr', '--query'], capture_output=True, text=True).stdout
-            for line in out.split('\n'):
-                if ' connected' in line:
-                    self.xrandr_outputs.append(line.split()[0])
-        except:
-            pass
-        
-        self.hw_brightness = 50      # 0-100 (DDC/CI)
-        self.sw_brightness = 1.0     # 0.0-1.0 (xrandr)
-        self.target_hw = 50
-        self.target_sw = 1.0
-        self.original_hw = 50
-        self.original_sw = 1.0
-        self._applying = False
-        self._pending_hw = None
-        self._pending_sw = None
-        
-        threading.Thread(target=self._fetch_current, daemon=True).start()
-        
+        self.displays = detect_displays()
+        self.outputs = detect_outputs()
+        config = load_config()
+
+        self.target_hw = clamp_hw(config.get('hw', HW_DEFAULT))
+        self.target_sw = clamp_sw(config.get('sw', SW_MAX))
+        self.original_hw = {}
+        self.original_sw = {}
+        self.hw_current = {}
+        self.sw_current = {}
+
+        self._hw_lock = threading.Lock()
+        self._sw_lock = threading.Lock()
+        self._hw_thread = None
+        self._sw_thread = None
+        self._hw_applying = False
+        self._sw_applying = False
+        self._shutting_down = False
+        self._suppress_events = False
+        self._sw_timeout_id = None
+
+        self._build_ui()
+        self._fetch_current()
+
+    # --- Montagem da UI ---------------------------------------------------
+
+    def _build_ui(self):
         self.window = Gtk.Window(title="Controle de Brilho")
-        self.window.set_default_size(460, 200)
+        self.window.set_default_size(460, 230)
         self.window.set_position(Gtk.WindowPosition.CENTER)
         self.window.connect("destroy", Gtk.main_quit)
-        
+        self.window.connect("delete-event", self.on_delete)
+
+        header = Gtk.HeaderBar()
+        header.set_show_close_button(True)
+        header.set_title("Controle de Brilho")
+        self.window.set_titlebar(header)
+
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
-        box.set_margin_top(15); box.set_margin_bottom(15)
-        box.set_margin_start(20); box.set_margin_end(20)
+        box.set_margin_top(15)
+        box.set_margin_bottom(15)
+        box.set_margin_start(20)
+        box.set_margin_end(20)
         self.window.add(box)
-        
-        # --- Hardware Brightness ---
+
+        # --- Hardware ---
         hw_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        hw_label = Gtk.Label(label="🖥️  Brilho do Monitor (Hardware DDC/CI):")
-        hw_label.set_halign(Gtk.Align.START)
-        hw_box.pack_start(hw_label, False, False, 0)
-        
-        self.hw_scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 1)
-        self.hw_scale.set_value(self.hw_brightness)
+        hw_text = "🖥️  Brilho do Monitor (Hardware DDC/CI):"
+        if not self.displays:
+            detail = ('ddcutil nao instalado' if not ddcutil_available()
+                      else 'nenhum monitor DDC/CI detectado')
+            hw_text += f"  ({detail})"
+        self.hw_label = Gtk.Label(label=hw_text)
+        self.hw_label.set_halign(Gtk.Align.START)
+        hw_box.pack_start(self.hw_label, False, False, 0)
+
+        self.hw_scale = Gtk.Scale.new_with_range(
+            Gtk.Orientation.HORIZONTAL, HW_MIN, HW_MAX, 1)
+        self.hw_scale.set_value(self.target_hw)
         self.hw_scale.set_digits(0)
         self.hw_scale.set_value_pos(Gtk.PositionType.RIGHT)
         self.hw_scale.set_hexpand(True)
@@ -65,15 +331,21 @@ class BrightnessApp:
         self.hw_scale.connect("button-release-event", self.on_hw_release)
         hw_box.pack_start(self.hw_scale, False, False, 0)
         box.pack_start(hw_box, False, False, 0)
-        
-        # --- Software Brightness ---
+
+        # --- Software ---
         sw_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        sw_label = Gtk.Label(label="🌑  Escurecimento Extra (Software - vai além do 0):")
-        sw_label.set_halign(Gtk.Align.START)
-        sw_box.pack_start(sw_label, False, False, 0)
-        
-        self.sw_scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0.1, 1.0, 0.01)
-        self.sw_scale.set_value(self.sw_brightness)
+        sw_text = "🌑  Escurecimento Extra (Software):"
+        if not self.outputs:
+            detail = ('xrandr nao instalado' if not xrandr_available()
+                      else 'nenhum output XRandR (Wayland?)')
+            sw_text += f"  ({detail})"
+        self.sw_label = Gtk.Label(label=sw_text)
+        self.sw_label.set_halign(Gtk.Align.START)
+        sw_box.pack_start(self.sw_label, False, False, 0)
+
+        self.sw_scale = Gtk.Scale.new_with_range(
+            Gtk.Orientation.HORIZONTAL, SW_MIN, SW_MAX, 0.01)
+        self.sw_scale.set_value(self.target_sw)
         self.sw_scale.set_digits(2)
         self.sw_scale.set_value_pos(Gtk.PositionType.RIGHT)
         self.sw_scale.set_hexpand(True)
@@ -81,163 +353,288 @@ class BrightnessApp:
         self.sw_scale.connect("value-changed", self.on_sw_changed)
         self.sw_scale.connect("button-release-event", self.on_sw_release)
         sw_box.pack_start(self.sw_scale, False, False, 0)
-        
-        # Valor percentual label
-        self.sw_pct_label = Gtk.Label(label="100%")
+
+        self.sw_pct_label = Gtk.Label(label=f"{int(self.target_sw * 100)}%")
         self.sw_pct_label.set_halign(Gtk.Align.END)
         sw_box.pack_start(self.sw_pct_label, False, False, 0)
         box.pack_start(sw_box, False, False, 0)
-        
-        # Status
-        self.status = Gtk.Label(label="")
+
+        self.status = Gtk.Label(label="Lendo valores atuais...")
         self.status.set_halign(Gtk.Align.START)
         box.pack_start(self.status, False, False, 0)
-        
-        # Botões
-        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-        btn_box.set_halign(Gtk.Align.END)
-        
-        btn_reset = Gtk.Button(label="Resetar (100% / 50%)")
+
+        self.controls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        self.controls.set_halign(Gtk.Align.END)
+        self.controls.set_sensitive(False)
+
+        btn_reset = Gtk.Button(label="Resetar (HW 50% / SW 100%)")
         btn_reset.connect("clicked", self.on_reset)
-        btn_box.pack_start(btn_reset, False, False, 0)
-        
+        self.controls.pack_start(btn_reset, False, False, 0)
+
         btn_ok = Gtk.Button(label="OK")
         btn_ok.connect("clicked", self.on_ok)
-        btn_box.pack_start(btn_ok, False, False, 0)
-        
+        self.controls.pack_start(btn_ok, False, False, 0)
+
         btn_cancel = Gtk.Button(label="Cancelar")
         btn_cancel.connect("clicked", self.on_cancel)
-        btn_box.pack_start(btn_cancel, False, False, 0)
-        
-        box.pack_start(btn_box, False, False, 0)
+        self.controls.pack_start(btn_cancel, False, False, 0)
+
+        box.pack_start(self.controls, False, False, 0)
         self.window.show_all()
-    
+
+    # --- Leitura inicial --------------------------------------------------
+
     def _fetch_current(self):
-        # Hardware
-        hw_val = 50
+        threading.Thread(target=self._fetch_worker, daemon=True).start()
+
+    def _fetch_worker(self):
         try:
-            if self.displays:
-                result = subprocess.run(
-                    ['ddcutil', 'getvcp', '10', '--display', str(self.displays[0])],
-                    capture_output=True, text=True, timeout=3)
-                import re
-                match = re.search(r'current value\s*=\s*(\d+)', result.stdout)
-                if match:
-                    hw_val = int(match.group(1))
-        except:
-            pass
-        
-        # Software (xrandr)
-        sw_val = 1.0
-        try:
-            if self.xrandr_outputs:
-                result = subprocess.run(
-                    ['xrandr', '--verbose'], capture_output=True, text=True, timeout=2)
-                import re
-                for line in result.stdout.split('\n'):
-                    if 'Brightness:' in line:
-                        match = re.search(r'Brightness:\s*([\d.]+)', line)
-                        if match:
-                            sw_val = float(match.group(1))
-                            break
-        except:
-            pass
-        
-        GLib.idle_add(self._init_scales, hw_val, sw_val)
-    
-    def _init_scales(self, hw, sw):
-        self.hw_brightness = self.target_hw = self.original_hw = hw
-        self.sw_brightness = self.target_sw = self.original_sw = sw
-        self.hw_scale.set_value(hw)
-        self.sw_scale.set_value(sw)
-        self._update_sw_label(sw)
-        return False
-    
-    def _update_sw_label(self, val):
-        self.sw_pct_label.set_text(f"{int(val * 100)}%")
-    
-    # --- Hardware apply loop ---
-    def _apply_hw_loop(self):
-        while True:
-            self._applying = True
-            target = self.target_hw
-            GLib.idle_add(self.status.set_text, f"Aplicando hardware: {target}%...")
-            
-            for d in self.displays:
-                subprocess.run(
-                    ['ddcutil', 'setvcp', '10', str(target), '--display', str(d)],
-                    capture_output=True, timeout=5)
-            
-            self.hw_brightness = target
-            GLib.idle_add(self._done_hw)
-            
-            if self._pending_hw is not None and self._pending_hw != self.target_hw:
-                self.target_hw = self._pending_hw
-                self._pending_hw = None
-                continue
-            break
-        
-        self._applying = False
-        GLib.idle_add(self.status.set_text, "")
-    
-    def _done_hw(self):
-        return False
-    
-    def set_hw_async(self, value):
-        self.target_hw = value
-        if not self._applying:
-            threading.Thread(target=self._apply_hw_loop, daemon=True).start()
+            hw = {d: read_hw_brightness(d) for d in self.displays}
+            sw = read_sw_brightness_all(self.outputs)
+        except Exception:
+            traceback.print_exc()
+            hw, sw = {}, {}
+        GLib.idle_add(self._apply_fetched, hw, sw)
+
+    def _apply_fetched(self, hw, sw):
+        if self._shutting_down:
+            return False
+        self.original_hw = {d: v for d, v in hw.items() if v is not None}
+        self.original_sw = {o: v for o, v in sw.items() if v is not None}
+        self.hw_current = dict(self.original_hw)
+        self.sw_current = dict(self.original_sw)
+
+        self._suppress_events = True
+        if self.original_hw:
+            value = next(iter(self.original_hw.values()))
+            self.target_hw = value
+            self.hw_scale.set_value(value)
+        if self.original_sw:
+            value = next(iter(self.original_sw.values()))
+            self.target_sw = value
+            self.sw_scale.set_value(value)
+        self._suppress_events = False
+
+        self._update_sw_label(self.sw_scale.get_value())
+        self.hw_scale.set_sensitive(bool(self.displays))
+        self.sw_scale.set_sensitive(bool(self.outputs))
+        self.controls.set_sensitive(True)
+
+        if self.displays and not self.original_hw:
+            self._set_status("Nao foi possivel ler o brilho atual do monitor.")
+        elif self.outputs and not self.original_sw:
+            self._set_status("Nao foi possivel ler o escurecimento atual.")
         else:
-            self._pending_hw = value
-    
-    # --- Software apply (instantâneo) ---
-    def set_sw_async(self, value):
-        self.target_sw = value
-        self.sw_brightness = value
-        GLib.idle_add(self._update_sw_label, value)
-        
-        def worker():
-            for out in self.xrandr_outputs:
-                subprocess.run(
-                    ['xrandr', '--output', out, '--brightness', str(value)],
-                    capture_output=True, timeout=2)
-        threading.Thread(target=worker, daemon=True).start()
-    
-    # --- Callbacks ---
+            self._set_status("")
+        return False
+
+    def _update_sw_label(self, val):
+        self.sw_pct_label.set_text(f"{int(round(val * 100))}%")
+
+    def _set_status(self, text):
+        self.status.set_text(text)
+
+    # --- Aplicacao do hardware (coalescida, com lock) ---------------------
+
+    def set_hw_async(self, value):
+        value = clamp_hw(value)
+        with self._hw_lock:
+            self.target_hw = value
+            if self._hw_applying or self._shutting_down:
+                return
+            self._hw_applying = True
+        self._hw_thread = threading.Thread(
+            target=self._apply_hw_loop, daemon=True)
+        self._hw_thread.start()
+
+    def _apply_hw_loop(self):
+        try:
+            while True:
+                with self._hw_lock:
+                    if self._shutting_down:
+                        self._hw_applying = False
+                        return
+                    target = self.target_hw
+                GLib.idle_add(self._set_status,
+                              f"Aplicando hardware: {target}%...")
+                for display in self.displays:
+                    if set_hw_brightness(display, target):
+                        self.hw_current[display] = target
+                with self._hw_lock:
+                    if self._shutting_down or self.target_hw == target:
+                        self._hw_applying = False
+                        GLib.idle_add(self._set_status, "")
+                        return
+        except Exception:
+            traceback.print_exc()
+            with self._hw_lock:
+                self._hw_applying = False
+            GLib.idle_add(self._set_status,
+                          "Erro ao aplicar o brilho de hardware.")
+
+    # --- Aplicacao do software (debounce de 150ms) ------------------------
+
+    def set_sw_async(self, value, immediate=False):
+        value = clamp_sw(value)
+        with self._sw_lock:
+            self.target_sw = value
+        self._update_sw_label(value)
+        if self._sw_timeout_id is not None:
+            GLib.source_remove(self._sw_timeout_id)
+            self._sw_timeout_id = None
+        if immediate:
+            self._start_sw_apply()
+        else:
+            self._sw_timeout_id = GLib.timeout_add(
+                DEBOUNCE_MS, self._on_sw_debounce)
+
+    def _on_sw_debounce(self):
+        self._sw_timeout_id = None
+        self._start_sw_apply()
+        return False
+
+    def _start_sw_apply(self):
+        with self._sw_lock:
+            if self._sw_applying or self._shutting_down or not self.outputs:
+                return
+            self._sw_applying = True
+        self._sw_thread = threading.Thread(
+            target=self._apply_sw_loop, daemon=True)
+        self._sw_thread.start()
+
+    def _apply_sw_loop(self):
+        try:
+            while True:
+                with self._sw_lock:
+                    if self._shutting_down:
+                        self._sw_applying = False
+                        return
+                    target = self.target_sw
+                for output in self.outputs:
+                    if set_sw_brightness(output, target):
+                        self.sw_current[output] = target
+                with self._sw_lock:
+                    if self._shutting_down or self.target_sw == target:
+                        self._sw_applying = False
+                        return
+        except Exception:
+            traceback.print_exc()
+            with self._sw_lock:
+                self._sw_applying = False
+
+    # --- Callbacks --------------------------------------------------------
+
     def on_hw_changed(self, scale):
-        self.set_hw_async(int(scale.get_value()))
+        if not self._suppress_events:
+            self.set_hw_async(int(scale.get_value()))
         return False
-    
+
     def on_hw_release(self, scale, event):
-        self.set_hw_async(int(scale.get_value()))
+        if not self._suppress_events:
+            self.set_hw_async(int(scale.get_value()))
         return False
-    
+
     def on_sw_changed(self, scale):
-        self.set_sw_async(scale.get_value())
+        if not self._suppress_events:
+            self.set_sw_async(scale.get_value())
         return False
-    
+
     def on_sw_release(self, scale, event):
-        self.set_sw_async(scale.get_value())
+        if not self._suppress_events:
+            self.set_sw_async(scale.get_value(), immediate=True)
         return False
-    
+
     def on_reset(self, widget):
-        self.set_hw_async(50)
-        self.hw_scale.set_value(50)
-        self.set_sw_async(1.0)
-        self.sw_scale.set_value(1.0)
+        self.hw_scale.set_value(HW_DEFAULT)
+        self.sw_scale.set_value(SW_MAX)
+        self.set_sw_async(SW_MAX, immediate=True)
         return False
-    
+
     def on_ok(self, widget):
+        self._shutdown()
+        updates = {}
+        if self.displays:
+            value = clamp_hw(self.hw_scale.get_value())
+            for display in self.displays:
+                if self.hw_current.get(display) != value:
+                    set_hw_brightness(display, value)
+            updates['hw'] = value
+        if self.outputs:
+            value = clamp_sw(self.sw_scale.get_value())
+            for output in self.outputs:
+                if self.sw_current.get(output) != value:
+                    set_sw_brightness(output, value)
+            updates['sw'] = value
+        if updates:
+            save_config(updates)
         Gtk.main_quit()
-    
+        return False
+
     def on_cancel(self, widget):
-        self.set_hw_async(self.original_hw)
-        self.set_sw_async(self.original_sw)
+        self._cancel()
+        return False
+
+    def on_delete(self, widget, event):
+        self._cancel()
+        return False
+
+    def _cancel(self):
+        self._shutdown()
+        for display, value in self.original_hw.items():
+            if self.hw_current.get(display) != value:
+                set_hw_brightness(display, value)
+        for output, value in self.original_sw.items():
+            if self.sw_current.get(output) != value:
+                set_sw_brightness(output, value)
         Gtk.main_quit()
-    
+
+    def _shutdown(self):
+        """Para os workers e espera o termino do comando em andamento."""
+        self._shutting_down = True
+        if self._sw_timeout_id is not None:
+            GLib.source_remove(self._sw_timeout_id)
+            self._sw_timeout_id = None
+        timeout = 2 + TIMEOUT_SW + TIMEOUT_HW * max(1, len(self.displays))
+        for thread in (self._hw_thread, self._sw_thread):
+            if thread is not None and thread.is_alive():
+                thread.join(timeout)
+
     def run(self):
         Gtk.main()
 
+
+# ---------------------------------------------------------------------------
+# Entrada
+# ---------------------------------------------------------------------------
+
+def build_parser():
+    parser = argparse.ArgumentParser(
+        prog='brightness-gui',
+        description='Controle de brilho para monitores externos '
+                    '(DDC/CI + xrandr). Sem opcoes abre a interface grafica.')
+    parser.add_argument(
+        '--adjust-hw', type=int, metavar='DELTA',
+        help='ajusta o brilho de hardware em DELTA (ex.: +10, -10) sem GUI')
+    parser.add_argument(
+        '--toggle-sw', action='store_true',
+        help='alterna o escurecimento por software entre 100%% e o ultimo valor')
+    parser.add_argument(
+        '--restore-last', action='store_true',
+        help='restaura os ultimos valores de brilho salvos')
+    return parser
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
+    if args.adjust_hw is not None:
+        return run_adjust_hw(args.adjust_hw)
+    if args.toggle_sw:
+        return run_toggle_sw()
+    if args.restore_last:
+        return run_restore_last()
+    BrightnessWindow().run()
+    return 0
+
+
 if __name__ == '__main__':
-    app = BrightnessApp()
-    app.run()
+    sys.exit(main())
