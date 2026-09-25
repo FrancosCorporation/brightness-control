@@ -1,0 +1,19 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install GTK, xrandr and Xvfb
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-gi gir1.2-gtk-3.0 xvfb x11-xserver-utils
+      - name: Syntax check
+        run: python3 -m py_compile brightness-gui
+      - name: Unit tests
+        run: xvfb-run -a python3 -m unittest discover -s tests -v
