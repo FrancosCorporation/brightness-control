@@ -342,6 +342,8 @@ class BrightnessWindow:
         self._shutting_down = False
         self._suppress_events = False
         self._sw_timeout_id = None
+        self._operation_errors = {}
+        self._transient_status = ''
 
         self._build_ui()
         self._fetch_current()
@@ -490,7 +492,18 @@ class BrightnessWindow:
         self.sw_pct_label.set_text(f"{int(round(val * 100))}%")
 
     def _set_status(self, text):
-        self.status.set_text(text)
+        self._transient_status = text
+        self.status.set_text('\n'.join(self._operation_errors.values()) or text)
+
+    def _set_operation_status(self, operation, text, clear_transient=False):
+        if text:
+            self._operation_errors[operation] = text
+        else:
+            self._operation_errors.pop(operation, None)
+        if clear_transient:
+            self._transient_status = ''
+        self.status.set_text('\n'.join(self._operation_errors.values()) or
+                             self._transient_status)
 
     # --- Aplicacao do hardware (coalescida, com lock) ---------------------
 
@@ -527,14 +540,15 @@ class BrightnessWindow:
                         self._hw_applying = False
                         mensagem = ('Falha ao aplicar o brilho de hardware.'
                                     if falha else '')
-                        GLib.idle_add(self._set_status, mensagem)
+                        GLib.idle_add(self._set_operation_status,
+                                      'hardware', mensagem, True)
                         return
         except Exception:
             traceback.print_exc()
             with self._hw_lock:
                 self._hw_applying = False
-            GLib.idle_add(self._set_status,
-                          "Erro ao aplicar o brilho de hardware.")
+            GLib.idle_add(self._set_operation_status, 'hardware',
+                          'Erro ao aplicar o brilho de hardware.', True)
 
     # --- Aplicacao do software (debounce de 150ms) ------------------------
 
@@ -586,12 +600,15 @@ class BrightnessWindow:
                         self._sw_applying = False
                         mensagem = ('Falha ao aplicar o escurecimento por software.'
                                     if falha else '')
-                        GLib.idle_add(self._set_status, mensagem)
+                        GLib.idle_add(self._set_operation_status,
+                                      'software', mensagem, True)
                         return
         except Exception:
             traceback.print_exc()
             with self._sw_lock:
                 self._sw_applying = False
+            GLib.idle_add(self._set_operation_status, 'software',
+                          'Erro ao aplicar o escurecimento por software.', True)
 
     # --- Callbacks --------------------------------------------------------
 
@@ -647,14 +664,20 @@ class BrightnessWindow:
             updates['sw'] = value
         if falhas:
             self._shutting_down = False
-            self._set_status('Nao foi possivel confirmar o brilho de ' +
-                             ' e '.join(sorted(set(falhas))) + '.')
+            self._set_operation_status(
+                'confirm', 'Nao foi possivel confirmar o brilho de ' +
+                ' e '.join(sorted(set(falhas))) + '.', True)
             return False
         if updates:
             if not save_config(updates):
                 self._shutting_down = False
-                self._set_status('Brilho aplicado, mas nao foi possivel salvar a configuracao.')
+                self._set_operation_status(
+                    'persistencia',
+                    'Brilho aplicado, mas nao foi possivel salvar a configuracao.',
+                    True)
                 return False
+        self._set_operation_status('confirm', '', True)
+        self._set_operation_status('persistencia', '', True)
         Gtk.main_quit()
         return False
 
@@ -682,10 +705,12 @@ class BrightnessWindow:
                     falhas.append('software')
         if falhas:
             self._shutting_down = False
-            self._set_status('Nao foi possivel restaurar o brilho de ' +
-                             ' e '.join(sorted(set(falhas))) +
-                             '. Tente cancelar novamente.')
+            self._set_operation_status(
+                'restauracao', 'Nao foi possivel restaurar o brilho de ' +
+                ' e '.join(sorted(set(falhas))) +
+                '. Tente cancelar novamente.', True)
             return False
+        self._set_operation_status('restauracao', '', True)
         Gtk.main_quit()
         return True
 

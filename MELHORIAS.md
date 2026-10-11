@@ -30,8 +30,8 @@ Nenhum segredo ou credencial foi encontrado nos arquivos rastreados nesta inspe�
 
 - **Arquivo:** `brightness-gui:39-54,147-202,204-283,480-688`
 - **Evidência:** os setters tratam qualquer processo iniciado como sucesso sem conferir `returncode`; as ações de toggle, restauração e UI também ignoram falhas e podem informar sucesso ou deixar de restaurar o valor original.
-- **Mudança:** verificar o código de saída dos comandos de leitura e escrita, propagar falhas pelas ações CLI e mostrar erro na interface; manter a janela aberta se confirmar ou restaurar não for possível.
-- **Aceite:** nenhuma ação informa sucesso nem persiste um novo valor quando algum comando necessário falha; Cancelar/fechar só conclui depois de restaurar os valores que foram lidos.
+- **Mudança:** verificar o código de saída dos comandos de leitura e escrita, propagar falhas pelas ações CLI e manter erros separados por operação na interface; manter a janela aberta se confirmar ou restaurar não for possível.
+- **Aceite:** nenhuma ação informa sucesso nem persiste um novo valor quando algum comando necessário falha; uma mensagem não apaga a falha da outra modalidade; Cancelar/fechar só conclui depois de restaurar os valores que foram lidos.
 - **Verificação:** `python3 -m py_compile brightness-gui`; revisar os ramos de retorno dos setters, ações CLI, workers, confirmação e cancelamento.
 - **Estado:** [x] concluído.
 
