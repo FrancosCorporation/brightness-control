@@ -16,8 +16,8 @@ Aplicação desktop GTK para Linux que controla brilho físico por DDC/CI e escu
 |---|---|---|
 | P0 | — | Nenhum item identificado |
 | P1 | BUG-01 | Concluído |
-| P2 | BUG-02 | Concluído |
-| P2 | BUG-03, DEVOPS-01 | Planejados |
+| P2 | BUG-02, BUG-03 | Concluídos |
+| P2 | DEVOPS-01 | Planejado |
 | P3 | DOC-01 | Planejado |
 
 ## 3. Segurança
@@ -46,12 +46,12 @@ Nenhum segredo ou credencial foi encontrado nos arquivos rastreados nesta inspe�
 
 ### BUG-03 · Gravar configuração sem truncamento [P2]
 
-- **Arquivo:** `brightness-gui:140-155`
+- **Arquivo:** `brightness-gui:141-166`
 - **Evidência:** salvar abre o arquivo final diretamente com modo `w`; interrupção durante a gravação pode deixar JSON incompleto, e erros de disco são ignorados.
 - **Mudança:** escrever arquivo temporário no mesmo diretório, sincronizar e substituir atomicamente; retornar sucesso/falha aos chamadores e limitar as permissões do arquivo.
 - **Aceite:** a configuração anterior permanece intacta se uma gravação falhar; os chamadores recebem o resultado real da persistência.
 - **Verificação:** `python3 -m py_compile brightness-gui`; revisar o uso de arquivo temporário, `fsync`, substituição atômica e retorno booleano.
-- **Estado:** [ ] planejado.
+- **Estado:** [x] concluído.
 
 ## 5. Qualidade e experiência
 
