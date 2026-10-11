@@ -16,7 +16,8 @@ Aplicação desktop GTK para Linux que controla brilho físico por DDC/CI e escu
 |---|---|---|
 | P0 | — | Nenhum item identificado |
 | P1 | BUG-01 | Concluído |
-| P2 | BUG-02, BUG-03, DEVOPS-01 | Planejados |
+| P2 | BUG-02 | Concluído |
+| P2 | BUG-03, DEVOPS-01 | Planejados |
 | P3 | DOC-01 | Planejado |
 
 ## 3. Segurança
@@ -36,16 +37,16 @@ Nenhum segredo ou credencial foi encontrado nos arquivos rastreados nesta inspe�
 
 ### BUG-02 · Validar valores salvos antes de usá-los [P2]
 
-- **Arquivo:** `brightness-gui:97-102,114-120,208-232,272-280`
+- **Arquivo:** `brightness-gui:102-119,126-137,247-253,271-312`
 - **Evidência:** JSON válido com valor não numérico, booleano ou não finito em `hw`, `sw` ou `sw_toggle` pode causar exceção ou uma decisão incorreta ao iniciar a interface e os atalhos.
 - **Mudança:** normalizar valores numéricos finitos dentro dos limites e usar defaults para tipos ou valores inválidos.
 - **Aceite:** configurações com valores inválidos não interrompem a inicialização e os valores efetivos permanecem dentro dos limites de hardware/software.
 - **Verificação:** `python3 -m py_compile brightness-gui`; revisar os conversores e os caminhos que leem `hw`, `sw` e `sw_toggle`.
-- **Estado:** [ ] planejado.
+- **Estado:** [x] concluído.
 
 ### BUG-03 · Gravar configuração sem truncamento [P2]
 
-- **Arquivo:** `brightness-gui:109-132`
+- **Arquivo:** `brightness-gui:140-155`
 - **Evidência:** salvar abre o arquivo final diretamente com modo `w`; interrupção durante a gravação pode deixar JSON incompleto, e erros de disco são ignorados.
 - **Mudança:** escrever arquivo temporário no mesmo diretório, sincronizar e substituir atomicamente; retornar sucesso/falha aos chamadores e limitar as permissões do arquivo.
 - **Aceite:** a configuração anterior permanece intacta se uma gravação falhar; os chamadores recebem o resultado real da persistência.
