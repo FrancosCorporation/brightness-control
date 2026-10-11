@@ -17,7 +17,7 @@ Aplicação desktop GTK para Linux que controla brilho físico por DDC/CI e escu
 | P0 | — | Nenhum item identificado |
 | P1 | BUG-01 | Concluído |
 | P2 | BUG-02, BUG-03 | Concluídos |
-| P2 | DEVOPS-01 | Planejado |
+| P2 | DEVOPS-01 | Concluído |
 | P3 | DOC-01 | Concluído |
 
 ## 3. Segurança
@@ -66,7 +66,7 @@ O status acessível dos comandos e da restauração está coberto por BUG-01.
 - **Mudança:** limitar as permissões do workflow a leitura de conteúdo.
 - **Aceite:** checkout e CI continuam com `contents: read` e sem permissões de escrita implícitas.
 - **Verificação:** `git diff --check`; revisar o bloco `permissions` e os jobs do workflow.
-- **Estado:** [ ] planejado.
+- **Estado:** [x] concluído.
 
 ## 7. Documentação
 
@@ -82,7 +82,7 @@ O status acessível dos comandos e da restauração está coberto por BUG-01.
 ## 8. Ordem de execução
 
 1. BUG-01 (P1).
-2. BUG-02 e BUG-03 (P2); DEVOPS-01 aguarda o escopo OAuth `workflow` para entrar na branch remota.
+2. BUG-02, BUG-03 e DEVOPS-01 (P2).
 3. DOC-01 (P3).
 
 ## 9. Fora de escopo
@@ -93,6 +93,6 @@ O status acessível dos comandos e da restauração está coberto por BUG-01.
 
 ## 10. Definição de pronto
 
-- Os itens aplicáveis à branch de revisão estão verificados estaticamente; DEVOPS-01 está pendente nela porque o GitHub recusou o commit de workflow sem o escopo OAuth `workflow`.
+- Os itens aplicáveis estão verificados estaticamente e marcados como concluídos.
 - A sintaxe Python compila; README e workflow correspondem ao repositório.
 - As alterações estão commitadas e enviadas à branch atual.
