@@ -37,12 +37,16 @@ _ENV = dict(os.environ, LC_ALL='C')
 
 
 def _run(cmd, timeout):
-    """Executa um comando com timeout e locale fixo; retorna None em falha."""
+    """Executa um comando com timeout e locale fixo; None indica falha de execução."""
     try:
         return subprocess.run(
             cmd, capture_output=True, text=True, timeout=timeout, env=_ENV)
     except (OSError, subprocess.SubprocessError):
         return None
+
+
+def _command_succeeded(result):
+    return result is not None and result.returncode == 0
 
 
 # ---------------------------------------------------------------------------
@@ -128,8 +132,9 @@ def save_config(updates):
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, 'w', encoding='utf-8') as handle:
             json.dump(data, handle, indent=2)
+        return True
     except OSError:
-        pass
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -148,7 +153,7 @@ def detect_displays():
     if not ddcutil_available():
         return []
     result = _run(['ddcutil', 'detect', '--terse'], TIMEOUT_DETECT)
-    if result is None:
+    if not _command_succeeded(result):
         return []
     return parse_ddcutil_displays(result.stdout)
 
@@ -157,7 +162,7 @@ def detect_outputs():
     if not xrandr_available():
         return []
     result = _run(['xrandr', '--query'], TIMEOUT_SW)
-    if result is None:
+    if not _command_succeeded(result):
         return []
     return parse_xrandr_outputs(result.stdout)
 
@@ -165,7 +170,7 @@ def detect_outputs():
 def read_hw_brightness(display):
     result = _run(['ddcutil', 'getvcp', VCP_BRIGHTNESS,
                    '--display', str(display)], TIMEOUT_HW)
-    if result is None:
+    if not _command_succeeded(result):
         return None
     return parse_ddcutil_brightness(result.stdout)
 
@@ -174,7 +179,7 @@ def read_sw_brightness_all(outputs):
     if not outputs:
         return {}
     result = _run(['xrandr', '--verbose'], TIMEOUT_SW)
-    if result is None:
+    if not _command_succeeded(result):
         return {}
     values = parse_xrandr_brightness(result.stdout)
     return {out: values[out] for out in outputs if out in values}
@@ -183,13 +188,13 @@ def read_sw_brightness_all(outputs):
 def set_hw_brightness(display, value):
     result = _run(['ddcutil', 'setvcp', VCP_BRIGHTNESS, str(value),
                    '--display', str(display)], TIMEOUT_HW)
-    return result is not None
+    return _command_succeeded(result)
 
 
 def set_sw_brightness(output, value):
     result = _run(['xrandr', '--output', output, '--brightness',
                    f'{value:.2f}'], TIMEOUT_SW)
-    return result is not None
+    return _command_succeeded(result)
 
 
 # ---------------------------------------------------------------------------
@@ -211,7 +216,10 @@ def run_adjust_hw(delta):
     if not all(results):
         print('Falha ao ajustar o brilho de hardware.', file=sys.stderr)
         return 1
-    save_config({'hw': new_value})
+    if not save_config({'hw': new_value}):
+        print('Brilho ajustado, mas nao foi possivel salvar a configuracao.',
+              file=sys.stderr)
+        return 1
     print(f'Brilho de hardware: {new_value}%')
     return 0
 
@@ -234,9 +242,15 @@ def run_toggle_sw():
     else:
         new_value = SW_MAX
         config['sw_toggle'] = clamp_sw(current)
-    for out in outputs:
-        set_sw_brightness(out, new_value)
-    save_config({'sw': new_value, 'sw_toggle': config['sw_toggle']})
+    results = [set_sw_brightness(out, new_value) for out in outputs]
+    if not all(results):
+        print('Falha ao aplicar o escurecimento em um ou mais outputs.',
+              file=sys.stderr)
+        return 1
+    if not save_config({'sw': new_value, 'sw_toggle': config['sw_toggle']}):
+        print('Escurecimento aplicado, mas nao foi possivel salvar a configuracao.',
+              file=sys.stderr)
+        return 1
     print(f'Escurecimento por software: {int(new_value * 100)}%')
     return 0
 
@@ -248,12 +262,25 @@ def run_restore_last():
     if hw_value is None and sw_value is None:
         print('Nenhum valor salvo para restaurar.', file=sys.stderr)
         return 1
+    falhas = []
     if hw_value is not None:
-        for display in detect_displays():
-            set_hw_brightness(display, clamp_hw(hw_value))
+        displays = detect_displays()
+        if not displays:
+            falhas.append('nenhum monitor DDC/CI disponivel')
+        for display in displays:
+            if not set_hw_brightness(display, clamp_hw(hw_value)):
+                falhas.append(f'falha no monitor DDC/CI {display}')
     if sw_value is not None:
-        for output in detect_outputs():
-            set_sw_brightness(output, clamp_sw(sw_value))
+        outputs = detect_outputs()
+        if not outputs:
+            falhas.append('nenhum output XRandR disponivel')
+        for output in outputs:
+            if not set_sw_brightness(output, clamp_sw(sw_value)):
+                falhas.append(f'falha no output XRandR {output}')
+    if falhas:
+        print('Nao foi possivel restaurar: ' + '; '.join(falhas) + '.',
+              file=sys.stderr)
+        return 1
     print('Valores restaurados.')
     return 0
 
@@ -274,6 +301,8 @@ class BrightnessWindow:
         self.original_sw = {}
         self.hw_current = {}
         self.sw_current = {}
+        self._hw_touched = False
+        self._sw_touched = False
 
         self._hw_lock = threading.Lock()
         self._sw_lock = threading.Lock()
@@ -438,6 +467,7 @@ class BrightnessWindow:
 
     def set_hw_async(self, value):
         value = clamp_hw(value)
+        self._hw_touched = True
         with self._hw_lock:
             self.target_hw = value
             if self._hw_applying or self._shutting_down:
@@ -457,13 +487,18 @@ class BrightnessWindow:
                     target = self.target_hw
                 GLib.idle_add(self._set_status,
                               f"Aplicando hardware: {target}%...")
+                falha = False
                 for display in self.displays:
                     if set_hw_brightness(display, target):
                         self.hw_current[display] = target
+                    else:
+                        falha = True
                 with self._hw_lock:
                     if self._shutting_down or self.target_hw == target:
                         self._hw_applying = False
-                        GLib.idle_add(self._set_status, "")
+                        mensagem = ('Falha ao aplicar o brilho de hardware.'
+                                    if falha else '')
+                        GLib.idle_add(self._set_status, mensagem)
                         return
         except Exception:
             traceback.print_exc()
@@ -476,6 +511,7 @@ class BrightnessWindow:
 
     def set_sw_async(self, value, immediate=False):
         value = clamp_sw(value)
+        self._sw_touched = True
         with self._sw_lock:
             self.target_sw = value
         self._update_sw_label(value)
@@ -510,12 +546,18 @@ class BrightnessWindow:
                         self._sw_applying = False
                         return
                     target = self.target_sw
+                falha = False
                 for output in self.outputs:
                     if set_sw_brightness(output, target):
                         self.sw_current[output] = target
+                    else:
+                        falha = True
                 with self._sw_lock:
                     if self._shutting_down or self.target_sw == target:
                         self._sw_applying = False
+                        mensagem = ('Falha ao aplicar o escurecimento por software.'
+                                    if falha else '')
+                        GLib.idle_add(self._set_status, mensagem)
                         return
         except Exception:
             traceback.print_exc()
@@ -553,20 +595,37 @@ class BrightnessWindow:
     def on_ok(self, widget):
         self._shutdown()
         updates = {}
+        falhas = []
         if self.displays:
             value = clamp_hw(self.hw_scale.get_value())
             for display in self.displays:
                 if self.hw_current.get(display) != value:
-                    set_hw_brightness(display, value)
+                    self._hw_touched = True
+                    if set_hw_brightness(display, value):
+                        self.hw_current[display] = value
+                    else:
+                        falhas.append('hardware')
             updates['hw'] = value
         if self.outputs:
             value = clamp_sw(self.sw_scale.get_value())
             for output in self.outputs:
                 if self.sw_current.get(output) != value:
-                    set_sw_brightness(output, value)
+                    self._sw_touched = True
+                    if set_sw_brightness(output, value):
+                        self.sw_current[output] = value
+                    else:
+                        falhas.append('software')
             updates['sw'] = value
+        if falhas:
+            self._shutting_down = False
+            self._set_status('Nao foi possivel confirmar o brilho de ' +
+                             ' e '.join(sorted(set(falhas))) + '.')
+            return False
         if updates:
-            save_config(updates)
+            if not save_config(updates):
+                self._shutting_down = False
+                self._set_status('Brilho aplicado, mas nao foi possivel salvar a configuracao.')
+                return False
         Gtk.main_quit()
         return False
 
@@ -575,18 +634,31 @@ class BrightnessWindow:
         return False
 
     def on_delete(self, widget, event):
-        self._cancel()
-        return False
+        return not self._cancel()
 
     def _cancel(self):
         self._shutdown()
+        falhas = []
         for display, value in self.original_hw.items():
-            if self.hw_current.get(display) != value:
-                set_hw_brightness(display, value)
+            if self._hw_touched or self.hw_current.get(display) != value:
+                if set_hw_brightness(display, value):
+                    self.hw_current[display] = value
+                else:
+                    falhas.append('hardware')
         for output, value in self.original_sw.items():
-            if self.sw_current.get(output) != value:
-                set_sw_brightness(output, value)
+            if self._sw_touched or self.sw_current.get(output) != value:
+                if set_sw_brightness(output, value):
+                    self.sw_current[output] = value
+                else:
+                    falhas.append('software')
+        if falhas:
+            self._shutting_down = False
+            self._set_status('Nao foi possivel restaurar o brilho de ' +
+                             ' e '.join(sorted(set(falhas))) +
+                             '. Tente cancelar novamente.')
+            return False
         Gtk.main_quit()
+        return True
 
     def _shutdown(self):
         """Para os workers e espera o termino do comando em andamento."""
@@ -594,7 +666,8 @@ class BrightnessWindow:
         if self._sw_timeout_id is not None:
             GLib.source_remove(self._sw_timeout_id)
             self._sw_timeout_id = None
-        timeout = 2 + TIMEOUT_SW + TIMEOUT_HW * max(1, len(self.displays))
+        timeout = (2 + TIMEOUT_SW * max(1, len(self.outputs)) +
+                   TIMEOUT_HW * max(1, len(self.displays)))
         for thread in (self._hw_thread, self._sw_thread):
             if thread is not None and thread.is_alive():
                 thread.join(timeout)
