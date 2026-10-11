@@ -15,7 +15,7 @@ Aplicação desktop GTK para Linux que controla brilho físico por DDC/CI e escu
 | Prioridade | Itens | Estado |
 |---|---|---|
 | P0 | — | Nenhum item identificado |
-| P1 | BUG-01 | Concluído |
+| P1 | BUG-01, BUG-04 | Concluídos |
 | P2 | BUG-02, BUG-03 | Concluídos |
 | P2 | DEVOPS-01 | Concluído |
 | P3 | DOC-01 | Concluído |
@@ -53,6 +53,15 @@ Nenhum segredo ou credencial foi encontrado nos arquivos rastreados nesta inspe�
 - **Verificação:** `python3 -m py_compile brightness-gui`; revisar o uso de arquivo temporário, `fsync`, substituição atômica e retorno booleano.
 - **Estado:** [x] concluído.
 
+### BUG-04 · Bloquear ajuste quando a leitura inicial é parcial [P1]
+
+- **Arquivo:** `brightness-gui:326-358,450-486,648-701`
+- **Evidência:** se a leitura inicial falha para apenas um dos vários monitores ou outputs, a interface ainda habilita o ajuste em todos eles. Ao cancelar, só restaura os valores que conseguiu ler, podendo fechar com um dispositivo alterado.
+- **Mudança:** habilitar cada controle somente quando todos os dispositivos daquela modalidade tiverem valor inicial conhecido; manter a outra modalidade independente e exibir qual controle foi desativado.
+- **Aceite:** falha parcial de leitura não permite alterar dispositivos sem valor original conhecido; a modalidade cuja leitura foi completa continua disponível; Cancelar não fecha após qualquer falha de restauração.
+- **Verificação:** `python3 -m py_compile brightness-gui`; revisar a habilitação dos controles, guards dos setters da interface e caminhos de confirmação/cancelamento. Não executar a suíte sem solicitação.
+- **Estado:** [x] concluído.
+
 ## 5. Qualidade e experiência
 
 O status acessível dos comandos e da restauração está coberto por BUG-01.
@@ -82,8 +91,9 @@ O status acessível dos comandos e da restauração está coberto por BUG-01.
 ## 8. Ordem de execução
 
 1. BUG-01 (P1).
-2. BUG-02, BUG-03 e DEVOPS-01 (P2).
-3. DOC-01 (P3).
+2. BUG-04 (P1).
+3. BUG-02, BUG-03 e DEVOPS-01 (P2).
+4. DOC-01 (P3).
 
 ## 9. Fora de escopo
 

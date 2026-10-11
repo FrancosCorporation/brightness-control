@@ -330,6 +330,8 @@ class BrightnessWindow:
         self.original_sw = {}
         self.hw_current = {}
         self.sw_current = {}
+        self._hw_ready = False
+        self._sw_ready = False
         self._hw_touched = False
         self._sw_touched = False
 
@@ -463,6 +465,10 @@ class BrightnessWindow:
         self.original_sw = {o: v for o, v in sw.items() if v is not None}
         self.hw_current = dict(self.original_hw)
         self.sw_current = dict(self.original_sw)
+        self._hw_ready = (bool(self.displays) and
+                          len(self.original_hw) == len(self.displays))
+        self._sw_ready = (bool(self.outputs) and
+                          len(self.original_sw) == len(self.outputs))
 
         self._suppress_events = True
         if self.original_hw:
@@ -476,16 +482,20 @@ class BrightnessWindow:
         self._suppress_events = False
 
         self._update_sw_label(self.sw_scale.get_value())
-        self.hw_scale.set_sensitive(bool(self.displays))
-        self.sw_scale.set_sensitive(bool(self.outputs))
+        self.hw_scale.set_sensitive(self._hw_ready)
+        self.sw_scale.set_sensitive(self._sw_ready)
         self.controls.set_sensitive(True)
 
-        if self.displays and not self.original_hw:
-            self._set_status("Nao foi possivel ler o brilho atual do monitor.")
-        elif self.outputs and not self.original_sw:
-            self._set_status("Nao foi possivel ler o escurecimento atual.")
-        else:
-            self._set_status("")
+        self._set_operation_status(
+            'hardware',
+            ('Nao foi possivel ler o brilho de todos os monitores; '
+             'controle de hardware desativado para permitir restauracao segura.'
+             if self.displays and not self._hw_ready else ''))
+        self._set_operation_status(
+            'software',
+            ('Nao foi possivel ler o escurecimento de todos os outputs; '
+             'controle por software desativado para permitir restauracao segura.'
+             if self.outputs and not self._sw_ready else ''))
         return False
 
     def _update_sw_label(self, val):
@@ -508,6 +518,8 @@ class BrightnessWindow:
     # --- Aplicacao do hardware (coalescida, com lock) ---------------------
 
     def set_hw_async(self, value):
+        if not self._hw_ready:
+            return
         value = clamp_hw(value)
         self._hw_touched = True
         with self._hw_lock:
@@ -553,6 +565,8 @@ class BrightnessWindow:
     # --- Aplicacao do software (debounce de 150ms) ------------------------
 
     def set_sw_async(self, value, immediate=False):
+        if not self._sw_ready:
+            return
         value = clamp_sw(value)
         self._sw_touched = True
         with self._sw_lock:
@@ -642,7 +656,7 @@ class BrightnessWindow:
         self._shutdown()
         updates = {}
         falhas = []
-        if self.displays:
+        if self._hw_ready:
             value = clamp_hw(self.hw_scale.get_value())
             for display in self.displays:
                 if self.hw_current.get(display) != value:
@@ -652,7 +666,7 @@ class BrightnessWindow:
                     else:
                         falhas.append('hardware')
             updates['hw'] = value
-        if self.outputs:
+        if self._sw_ready:
             value = clamp_sw(self.sw_scale.get_value())
             for output in self.outputs:
                 if self.sw_current.get(output) != value:

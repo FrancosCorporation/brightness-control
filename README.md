@@ -128,6 +128,7 @@ Hidden=false
 | Problema | Solução |
 |----------|---------|
 | "Nenhum monitor DDC/CI detectado" | Ative DDC/CI no OSD do monitor; use cabo DisplayPort/HDMI (não VGA); `sudo modprobe i2c-dev` |
+| Controle desativado na janela | Feche e reabra o app para repetir a leitura; o controle só é ativado quando o app consegue ler todos os dispositivos daquela modalidade |
 | Brilho não muda | `ddcutil detect` — veja se lista seus monitores; tente `sudo ddcutil setvcp 10 50 --display 1` |
 | Delay no slider | Normal em monitores lentos — o debounce de 150ms evita flood de comandos |
 | Dois monitores, um não responde | Alguns monitores não suportam DDC/CI via HDMI — tente DisplayPort |
