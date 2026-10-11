@@ -1,23 +1,6 @@
 # Brightness Control 🖥️🌙
 
-## 🐳 Instalação e Execução (Docker) — recomendado
-
-### Pré-requisitos
-- [Docker](https://docs.docker.com/get-docker/) + Docker Compose
-
-### Rodar com Docker
-```bash
-docker compose up --build
-```
-App desktop — container não é o fluxo recomendado.
-
-### Sem Docker (local)
-```bash
-# App desktop Linux (X11)
-./brightness-gui
-```
-
-> Controle de brilho para monitores externos no Linux via **DDC/CI** (hardware) + **xrandr** (software dimming)
+> Aplicação de desktop para Linux/X11: controla brilho físico via **DDC/CI** e escurecimento por software via **XRandR**. O repositório não inclui imagem Docker ou arquivo Compose; a execução é local.
 
 ![GitHub release](https://img.shields.io/github/v/release/FrancosCorporation/brightness-control)
 ![License](https://img.shields.io/github/license/FrancosCorporation/brightness-control)
@@ -51,18 +34,18 @@ App desktop — container não é o fluxo recomendado.
 
 ---
 
-## 🚀 Instalação Rápida
+## 🚀 Instalação e execução
 
 ### Pré-requisitos
 ```bash
 # Ubuntu / Debian / Mint / Pop!_OS
-sudo apt update && sudo apt install -y ddcutil python3-gi gir1.2-gtk-3.0
+sudo apt update && sudo apt install -y ddcutil x11-xserver-utils python3-gi gir1.2-gtk-3.0
 
 # Arch / Manjaro
-sudo pacman -S ddcutil python-gobject gtk3
+sudo pacman -S ddcutil xorg-xrandr python-gobject gtk3
 
 # Fedora
-sudo dnf install ddcutil python3-gobject gtk3
+sudo dnf install ddcutil xrandr python3-gobject gtk3
 ```
 
 > **Importante:** Seu monitor precisa suportar **DDC/CI** (a maioria dos monitores modernos suporta). Verifique no menu do monitor (OSD) se "DDC/CI" está **ativado**.

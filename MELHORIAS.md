@@ -18,7 +18,7 @@ Aplicação desktop GTK para Linux que controla brilho físico por DDC/CI e escu
 | P1 | BUG-01 | Concluído |
 | P2 | BUG-02, BUG-03 | Concluídos |
 | P2 | DEVOPS-01 | Planejado |
-| P3 | DOC-01 | Planejado |
+| P3 | DOC-01 | Concluído |
 
 ## 3. Segurança
 
@@ -72,17 +72,17 @@ O status acessível dos comandos e da restauração está coberto por BUG-01.
 
 ### DOC-01 · Corrigir o fluxo de instalação [P3]
 
-- **Arquivo:** `README.md:3-18,54-85`
+- **Arquivo:** `README.md:3,37-68`
 - **Evidência:** a seção inicial recomenda `docker compose up --build`, mas o repositório não contém Dockerfile nem arquivo Compose; a frase seguinte contradiz a recomendação.
 - **Mudança:** documentar a instalação Linux local como fluxo suportado e listar os pacotes necessários para DDC/CI e XRandR.
 - **Aceite:** os comandos documentados correspondem aos arquivos presentes e instalam as dependências citadas pelo app.
 - **Verificação:** `git diff --check`; conferir comandos por distribuição com a lista de dependências e o executável `brightness-gui`.
-- **Estado:** [ ] planejado.
+- **Estado:** [x] concluído.
 
 ## 8. Ordem de execução
 
 1. BUG-01 (P1).
-2. BUG-02, BUG-03 e DEVOPS-01 (P2).
+2. BUG-02 e BUG-03 (P2); DEVOPS-01 aguarda o escopo OAuth `workflow` para entrar na branch remota.
 3. DOC-01 (P3).
 
 ## 9. Fora de escopo
@@ -93,6 +93,6 @@ O status acessível dos comandos e da restauração está coberto por BUG-01.
 
 ## 10. Definição de pronto
 
-- Os itens aplicáveis estão verificados estaticamente e marcados como concluídos.
+- Os itens aplicáveis à branch de revisão estão verificados estaticamente; DEVOPS-01 está pendente nela porque o GitHub recusou o commit de workflow sem o escopo OAuth `workflow`.
 - A sintaxe Python compila; README e workflow correspondem ao repositório.
 - As alterações estão commitadas e enviadas à branch atual.
