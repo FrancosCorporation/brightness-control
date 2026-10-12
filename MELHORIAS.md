@@ -8,7 +8,7 @@
 
 ## 1. Diagnóstico executivo
 
-Aplicação desktop GTK para Linux que controla brilho físico por DDC/CI e escurecimento por XRandR. O fluxo principal está implementado e já tem testes e CI, mas o status dos comandos externos não é respeitado, configurações malformadas podem causar exceções e o README aponta para uma execução Docker sem arquivos de container.
+Aplicação desktop GTK para Linux que controla brilho físico por DDC/CI e escurecimento por XRandR. Esta rodada corrigiu o tratamento de falhas dos comandos, a validação/persistência das configurações e o fluxo de instalação documentado. A CI inclui testes de unidade, que continuam sem execução nesta tarefa.
 
 ## 2. Tabela de prioridades
 
@@ -18,6 +18,7 @@ Aplicação desktop GTK para Linux que controla brilho físico por DDC/CI e escu
 | P1 | BUG-01, BUG-04 | Concluídos |
 | P2 | BUG-02, BUG-03 | Concluídos |
 | P2 | DEVOPS-01 | Concluído |
+| P2 | DEVOPS-02 | Concluído |
 | P3 | DOC-01 | Concluído |
 
 ## 3. Segurança
@@ -76,6 +77,15 @@ O status acessível dos comandos e da restauração está coberto por BUG-01.
 - **Aceite:** checkout e CI continuam com `contents: read` e sem permissões de escrita implícitas.
 - **Verificação:** `git diff --check`; revisar o bloco `permissions` e os jobs do workflow.
 - **Estado:** [x] concluído.
+
+### DEVOPS-02 · Fixar a imagem do runner e atualizar checkout [P2]
+
+- **Arquivo:** `.github/workflows/ci.yml`
+- **Evidência:** `ubuntu-latest` mudará de Ubuntu 24.04 para Ubuntu 26.04 entre 19/10 e 19/11/2026, o que pode alterar pacotes GTK/X11 do job. O workflow ainda usava `actions/checkout@v4`.
+- **Mudança:** fixar `ubuntu-24.04` e atualizar para `actions/checkout@v7`.
+- **Aceite:** o CI mantém o ambiente GTK/X11 conhecido e checkout atualizado; a suíte existente permanece configurada.
+- **Verificação:** diff check, parse YAML e assertions estruturais do workflow; AST Python também passou. A suíte não foi executada.
+- **Estado:** [x] concluído; commit `10078bc` publicado com `[skip ci]`. A CI não foi disparada porque este workflow executa testes de unidade.
 
 ## 7. Documentação
 
